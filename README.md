@@ -1,80 +1,79 @@
-# Flatexporter (Hardened Edition)
+# Flatexporter (Modern Playwright & Hardened Shell Edition)
 
-A secure shell script to export depot (portfolio) contents as CSV from [flatex.de](https://www.flatex.de).
+An automated tool to export depot (portfolio) contents as **CSV** or **JSON** from [flatex.de](https://www.flatex.de).
 
-Flatex does not provide an official public API, so this script replicates the authentication and export flow of the web interface.
-
-> Forked from [andreas-hartmann/flatexporter](https://github.com/andreas-hartmann/flatexporter) with security, privacy, and cross-platform enhancements.
-
----
-
-## Key Improvements in this Fork
-
-* **No Credentials in CLI Arguments:** Protects credentials from leaking in `ps`, `/proc`, terminal logs, and shell history (`~/.bash_history` / `~/.zsh_history`).
-* **Interactive Masked Input:** Prompts for credentials if not set, masking the password input (`read -s`).
-* **Environment Variable & Secret Manager Support:** Supports `FLATEX_USER` and `FLATEX_PASSWORD` for automated runs or password manager integration (macOS Keychain, Linux `pass`, etc.).
-* **Safe Parameter Encoding:** Automatically URL-encodes authentication payloads using `curl --data-urlencode` to support passwords containing special characters (`&`, `=`, `+`, etc.).
-* **Secure Temporary Storage:** Replaced predictable `/tmp/cookies` with isolated temporary directories (`mktemp -d`) configured with restricted permissions (`0700`) and automatic cleanup traps on exit or interrupt.
-* **No Remote Binary Downloads:** Removed automatic runtime downloading and executing of arbitrary binaries into `/tmp`. Dependencies are verified before execution.
-* **Cross-Platform Compatibility:** Runs seamlessly on macOS (BSD tools) and Linux (GNU tools) without relying on GNU-specific `grep -P`.
-* **Strict Error Handling:** Implements `set -euo pipefail` and validates session establishment.
+Because Flatex uses a JavaScript-rendered portal protected by Myra Security (WAF) and PSD2 Two-Factor Authentication (2FA / Strong Customer Authentication), this repository provides:
+1. **`flatexporter.py` (Recommended):** Modern browser automation using **Playwright**. Handles bot protection, dynamic forms, 2FA app approvals, and exports to either CSV or structured JSON.
+2. **`flatexporter.sh`:** Hardened bash script based on the original 2020 version with secure credential and temporary file management.
 
 ---
 
-## Requirements
+## 1. Quickstart with Playwright (Recommended)
 
-* `curl`
-* `jq`
+### Prerequisites
 
-Install them via your package manager if not already present:
-
-* **macOS:** `brew install curl jq`
-* **Debian / Ubuntu:** `sudo apt-get install curl jq`
-* **Fedora / RHEL:** `sudo dnf install curl jq`
-
----
-
-## Usage
-
-### 1. Interactive Mode (Recommended for manual use)
-
-Simply run the script. It will prompt for your username and password (the password will be masked):
+Create a virtual environment and install the dependencies:
 
 ```bash
-./flatexporter.sh > my_portfolio.csv
+cd flatexporter
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium
 ```
 
-### 2. Environment Variables (Automated jobs / scripts)
+### Usage
 
+#### Interactive Mode (Default: Opens browser window so you can approve 2FA)
 ```bash
-export FLATEX_USER="your_username"
-export FLATEX_PASSWORD="your_password"
-./flatexporter.sh > my_portfolio.csv
+./venv/bin/python3 flatexporter.py -o portfolio.csv
+```
+1. You will be prompted for your username and password (password input is masked).
+2. Chromium will launch and navigate to `https://konto.flatex.de/`.
+3. It fills the credentials and waits for your confirmation in the **Flatex Secure App** on your phone.
+4. Once authenticated, it triggers the depot statement export and saves it to `portfolio.csv`.
+
+#### Export as Structured JSON
+```bash
+./venv/bin/python3 flatexporter.py --format json -o portfolio.json
+```
+Automatically converts German localized CSV numbers (e.g., `1.234,56 €`) into standardized JSON numbers (`1234.56`).
+
+#### Pipe directly to downstream tools / APIs
+```bash
+./venv/bin/python3 flatexporter.py --format json -o - | jq .
 ```
 
-### 3. Password Manager Integration
-
-#### macOS Keychain
-Store your password in Keychain:
+#### Headless Mode (For CI/CD or Background Daemons)
 ```bash
-security add-generic-password -a "$USER" -s "flatex" -w "your_password"
-```
-
-Then run:
-```bash
-FLATEX_USER="your_username" FLATEX_PASSWORD=$(security find-generic-password -s "flatex" -w) ./flatexporter.sh > my_portfolio.csv
-```
-
-#### Linux `pass`
-```bash
-FLATEX_USER="your_username" FLATEX_PASSWORD=$(pass show banking/flatex) ./flatexporter.sh > my_portfolio.csv
+FLATEX_USER="your_user" FLATEX_PASSWORD="your_password" ./venv/bin/python3 flatexporter.py --headless -o portfolio.csv
 ```
 
 ---
 
-## Two-Factor Authentication (2FA / PSD2) Note
+## 2. Command-Line Options (`flatexporter.py`)
 
-Under European banking regulations (PSD2), flatex may require Strong Customer Authentication (SCA). If your account prompts for mobile app authorization, ensure you confirm any push notification or challenge in your flatex app when executing the script.
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `-u`, `--user` | Flatex Username / Account Number (or set `FLATEX_USER`) | Prompted |
+| `-p`, `--password` | Flatex Password (or set `FLATEX_PASSWORD`) | Prompted |
+| `-o`, `--output` | Destination file path (use `-` for `stdout`) | `portfolio.csv` |
+| `--format` | Output format: `csv` or `json` | `csv` |
+| `--headless` | Run in headless mode (omitted = opens visible browser) | `False` |
+| `--timeout` | Timeout in seconds to wait for 2FA approval | `180` |
+
+---
+
+## 3. Two-Factor Authentication (2FA / SCA) Note
+
+Under European PSD2 banking regulations, flatex requires Strong Customer Authentication. When running in headed mode (the default), you can observe the browser window and confirm any push notification in your flatex Secure App. The script will automatically detect the approved session and proceed with the download.
+
+---
+
+## Security & Privacy
+
+* Credentials are never logged to disk or stored in shell history.
+* All generated files (`portfolio.csv`, `portfolio.json`, `venv/`, `.env`) are ignored via `.gitignore` to prevent accidental commits.
 
 ---
 
@@ -82,3 +81,4 @@ Under European banking regulations (PSD2), flatex may require Strong Customer Au
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE) (GPLv3).
 Original author: [Andreas Hartmann](https://github.com/andreas-hartmann/flatexporter).
+Modern enhancements & Playwright port: [missunderstoodninja](https://github.com/missunderstoodninja/flatexporter).

@@ -1,3 +1,9 @@
+# Python Environments & Cache
+venv/
+.venv/
+__pycache__/
+*.pyc
+
 # Security & Sensitive Files
 .env
 *.env
