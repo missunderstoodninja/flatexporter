@@ -1,0 +1,14 @@
+# Security & Sensitive Files
+.env
+*.env
+cookies*.txt
+cookies/
+
+# Exported Financial Data
+*.csv
+*.tsv
+*.json
+
+# OS Files
+.DS_Store
+Thumbs.db

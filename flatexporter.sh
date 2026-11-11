@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #######################################
 #  .d888888        888                                          888
@@ -15,60 +15,133 @@
 #
 # Exports the contents of a flatex depot as csv.
 #
-# Requires curl and jq or gpg. If jq is not found in the path, it will be downloaded to /tmp.
-# Gpg is required to verify the signature of the downloaded file. It's only needed if jq isn't already installed.
+# Requires: curl, jq
 #
-# Usage: ./flatexporter.sh username password
+# Usage:
+#   Interactive prompt:   ./flatexporter.sh
+#   Environment vars:     FLATEX_USER=... FLATEX_PASSWORD=... ./flatexporter.sh
+#   macOS Keychain:       FLATEX_PASSWORD=$(security find-generic-password -s "flatex" -w) ./flatexporter.sh
 #
-# Version: 1.1
+# Author: Andreas Hartmann (https://github.com/andreas-hartmann/flatexporter)
+# Security & portability improvements: https://github.com/missunderstoodninja/flatexporter
 #
-# Author: Andreas Hartmann
-# https://github.com/Yugen42/flatexporter
+# License: GNU General Public License v3.0 (GPLv3)
 #######################################
 
-# Download jq if it's not in the path.
-jqpath=$(which jq)
-if ! [ -x "$jqpath" ] ; then
-	JQ_VERSION=1.5
+set -euo pipefail
 
-	curl -Ls https://raw.githubusercontent.com/stedolan/jq/master/sig/jq-release.key --output /tmp/jq-release.key
-	curl -Ls https://raw.githubusercontent.com/stedolan/jq/master/sig/v${JQ_VERSION}/jq-linux64.asc --output /tmp/jq-linux64.asc
-	curl -Ls https://github.com/stedolan/jq/releases/download/jq-${JQ_VERSION}/jq-linux64 --output /tmp/jq-linux64
-	gpg -q --import /tmp/jq-release.key
-	gpg --verify /tmp/jq-linux64.asc /tmp/jq-linux64 2>/dev/null
+# Check required dependencies
+check_dependencies() {
+	local missing=()
+	for cmd in curl jq; do
+		if ! command -v "$cmd" >/dev/null 2>&1; then
+			missing+=("$cmd")
+		fi
+	done
 
-	if ! [ $? -eq 0 ] ; then
-		exit $?
+	if [ ${#missing[@]} -gt 0 ]; then
+		echo "Error: Missing required dependencies: ${missing[*]}" >&2
+		echo "Please install them via your package manager:" >&2
+		echo "  macOS:         brew install ${missing[*]}" >&2
+		echo "  Debian/Ubuntu: sudo apt-get install ${missing[*]}" >&2
+		echo "  Fedora/RHEL:   sudo dnf install ${missing[*]}" >&2
+		exit 1
+	fi
+}
+
+# Prompt or load credentials securely without exposing them in process lists or shell history
+get_credentials() {
+	USERNAME="${FLATEX_USER:-}"
+	PASSWORD="${FLATEX_PASSWORD:-}"
+
+	if [ -z "$USERNAME" ]; then
+		read -r -p "Flatex Username / Account Number: " USERNAME
 	fi
 
-	chmod +x /tmp/jq-linux64
+	if [ -z "$PASSWORD" ]; then
+		read -r -s -p "Flatex Password: " PASSWORD
+		echo "" >&2
+	fi
 
-	jq () {
-		/tmp/jq-linux64 $1 $2
-	}
-fi
+	if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+		echo "Error: Both username and password are required." >&2
+		exit 1
+	fi
+}
 
-# Log in and store cookies in a temporary file.
-curl -sLc /tmp/cookies --post302 \
-	'https://www.flatex.de/sso'\
-	--data-raw "tx_flatexaccounts_singlesignonbanking%5Buname_app%5D=$1&tx_flatexaccounts_singlesignonbanking%5Bpassword_app%5D=$2"\
-	--compressed --output /dev/null
-# Extract the sessionid.
-jsessionid=$(cat /tmp/cookies | grep -oP '(?<=JSESSIONID).*' | xargs)
+# Set up an isolated temporary workspace with strict permissions (0700) and auto-cleanup
+setup_temp_dir() {
+	umask 077
+	WORKDIR="$(mktemp -d -t flatexporter.XXXXXX)"
+	COOKIE_JAR="${WORKDIR}/cookies.txt"
 
-# Remove the temporary cookies file.
-rm /tmp/cookies
+	# Ensure temp directory is always deleted on exit or signal
+	trap 'rm -rf "${WORKDIR}"' EXIT INT TERM HUP
+}
 
-# Ask for the CSV file download link and extract it.
-# X-tokenId needs to be set to any value, X-AJAX must be true.
-csvpath=$(curl -s 'https://konto.flatex.de/banking-flatex/ajaxCommandServlet'\
-	-H 'X-tokenId: 0'\
-	-H 'X-AJAX: true'\
-	-H "Cookie: JSESSIONID=$jsessionid"\
-	--data-raw "command=triggerAction&widgetId=depositStatementForm_tableActionCombobox_entriesI1I&widgetName=tableActionCombobox.entries%5B1%5D&eventType=click&delay=0"\
-	--compressed | jq -r '.commands[0].script' | grep -oP '(?<=DownloadDocumentBrowserBehaviorsClick.finished\(\").*?csv')
+main() {
+	check_dependencies
+	get_credentials
+	setup_temp_dir
 
-# Download and print the file.
-curl -s "https://konto.flatex.de$csvpath"\
-	-H "Cookie: JSESSIONID=$jsessionid"\
-	--compressed
+	>&2 echo "Authenticating with flatex.de..."
+
+	# Log in and store cookies in our isolated cookie jar.
+	# Using --data-urlencode ensures special characters in passwords do not corrupt the request.
+	curl -sL --post302 \
+		--cookie-jar "$COOKIE_JAR" \
+		--cookie "$COOKIE_JAR" \
+		--compressed \
+		--data-urlencode "tx_flatexaccounts_singlesignonbanking[uname_app]=${USERNAME}" \
+		--data-urlencode "tx_flatexaccounts_singlesignonbanking[password_app]=${PASSWORD}" \
+		--output /dev/null \
+		'https://www.flatex.de/sso'
+
+	# Extract JSESSIONID portably (works across Linux, macOS, BSD without GNU grep -P)
+	jsessionid=$(awk '$0 ~ /JSESSIONID/ {print $NF}' "$COOKIE_JAR" | tail -n 1)
+
+	if [ -z "$jsessionid" ]; then
+		>&2 echo "Error: Authentication failed or 2FA confirmation required."
+		>&2 echo "Please verify credentials and check if a 2FA challenge is pending in your flatex app."
+		exit 1
+	fi
+
+	>&2 echo "Requesting CSV download link..."
+
+	# Ask for the CSV file download link and extract it.
+	# X-tokenId needs to be set to any value, X-AJAX must be true.
+	ajax_response=$(curl -s 'https://konto.flatex.de/banking-flatex/ajaxCommandServlet' \
+		--cookie-jar "$COOKIE_JAR" \
+		--cookie "$COOKIE_JAR" \
+		-H 'X-tokenId: 0' \
+		-H 'X-AJAX: true' \
+		-H "Cookie: JSESSIONID=$jsessionid" \
+		--data-raw "command=triggerAction&widgetId=depositStatementForm_tableActionCombobox_entriesI1I&widgetName=tableActionCombobox.entries%5B1%5D&eventType=click&delay=0" \
+		--compressed)
+
+	script_content=$(echo "$ajax_response" | jq -r '.commands[0].script // empty')
+
+	if [ -z "$script_content" ]; then
+		>&2 echo "Error: Did not receive expected response from flatex. The session may have expired."
+		exit 1
+	fi
+
+	# Extract the CSV download path using portable sed
+	csvpath=$(echo "$script_content" | sed -n 's/.*DownloadDocumentBrowserBehaviorsClick\.finished("\([^"]*\.csv\)".*/\1/p')
+
+	if [ -z "$csvpath" ]; then
+		>&2 echo "Error: Could not find CSV download path in flatex response."
+		exit 1
+	fi
+
+	>&2 echo "Downloading CSV..."
+
+	# Download and stream the CSV to standard output
+	curl -s "https://konto.flatex.de$csvpath" \
+		--cookie-jar "$COOKIE_JAR" \
+		--cookie "$COOKIE_JAR" \
+		-H "Cookie: JSESSIONID=$jsessionid" \
+		--compressed
+}
+
+main "$@"
