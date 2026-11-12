@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 try:
@@ -25,11 +26,32 @@ except ImportError:
     sys.exit(1)
 
 LOGIN_URL = "https://konto.flatex.de/"
+LOG_FILE = Path("flatexporter.log").resolve()
 
 # DOM Selectors for flatex login form
 USER_SELECTOR = "#loginForm_txtUserId"
 PASS_SELECTOR = "#loginForm_txtPassword_txtPassword"
 SUBMIT_SELECTOR = "#loginForm_btnLogin"
+
+
+def log(msg):
+    """Prints status messages to stderr and appends them to flatexporter.log."""
+    print(msg, file=sys.stderr, flush=True)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+
+def pause_and_exit(code=0):
+    """Prevents terminal window from instantly closing on macOS if the shell exits."""
+    if sys.stdin.isatty():
+        try:
+            input("\n[Process completed. Press Enter to exit...]")
+        except (KeyboardInterrupt, EOFError):
+            pass
+    sys.exit(code)
 
 
 def parse_args():
@@ -84,19 +106,19 @@ def get_credentials(args):
         try:
             username = input("Flatex Username / Account Number: ").strip()
         except (KeyboardInterrupt, EOFError):
-            print("\nAborted.", file=sys.stderr)
-            sys.exit(1)
+            log("\nAborted.")
+            pause_and_exit(1)
 
     if not password:
         try:
             password = getpass.getpass("Flatex Password: ").strip()
         except (KeyboardInterrupt, EOFError):
-            print("\nAborted.", file=sys.stderr)
-            sys.exit(1)
+            log("\nAborted.")
+            pause_and_exit(1)
 
     if not username or not password:
-        print("Error: Both username and password are required.", file=sys.stderr)
-        sys.exit(1)
+        log("Error: Both username and password are required.")
+        pause_and_exit(1)
 
     return username, password
 
@@ -173,7 +195,7 @@ def trigger_csv_export(page, headless=False):
             for cb in combobox_candidates:
                 if cb.count() > 0 and cb.first.is_visible():
                     try:
-                        print("[*] Found 'Aktionen' dropdown, opening menu...", file=sys.stderr)
+                        log("[*] Found 'Aktionen' dropdown, opening menu...")
                         cb.first.click(force=True)
                         time.sleep(0.8)
                         dismiss_cookiebot(page)
@@ -189,14 +211,14 @@ def trigger_csv_export(page, headless=False):
                         ]
                         for entry in csv_candidates:
                             if entry.count() > 0 and entry.first.is_visible():
-                                print("[*] Clicking 'Export CSV' entry...", file=sys.stderr)
+                                log("[*] Clicking 'Export CSV' entry...")
                                 entry.first.click(force=True)
                                 triggered = True
                                 break
                         if triggered:
                             break
                     except Exception as e:
-                        print(f"[*] Note: Combobox click attempted ({e})", file=sys.stderr)
+                        log(f"[*] Note: Combobox click attempted ({e})")
 
             # 2. If not triggered via dropdown, look for direct buttons/links
             if not triggered:
@@ -212,18 +234,18 @@ def trigger_csv_export(page, headless=False):
                 ]
                 for elem in export_selectors:
                     if elem.count() > 0 and elem.first.is_visible():
-                        print("[*] Clicking direct export element...", file=sys.stderr)
+                        log("[*] Clicking direct export element...")
                         elem.first.click(force=True)
                         triggered = True
                         break
 
             # 3. If in headed mode, let user click the export button manually if needed
             if not triggered and not headless:
-                print("[!] Please click 'Aktionen' -> 'Export CSV' in the browser window now...", file=sys.stderr)
+                log("[!] Please click 'Aktionen' -> 'Export CSV' in the browser window now...")
 
             download = download_info.value
     except PlaywrightTimeoutError:
-        print("Error: Timed out waiting for file download to trigger.", file=sys.stderr)
+        log("Error: Timed out waiting for file download to trigger.")
         return None
 
     # Retrieve downloaded file content
@@ -232,23 +254,23 @@ def trigger_csv_export(page, headless=False):
         return f.read()
 
 
-def navigate_to_depot_holdings(page):
+def navigate_to_depot_holdings(page, headless=False):
     """
-    Ensures the browser navigates from the overview page to the Depotbestand page.
+    Navigates from the overview page to the Depotbestand page.
     """
     dismiss_cookiebot(page)
 
     # 1. Check if already on the Depotbestand page
     if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
+        log("[*] Already on Depotbestand page.")
         return True
 
-    # 2. Try direct menu links: Konto & Depot -> Depotbestand
-    print("[*] Navigating to Depotbestand...", file=sys.stderr)
+    # 2. Try direct menu links
+    log("[*] Navigating to Depotbestand...")
     try:
         direct_link = page.locator("a:has-text('Depotbestand'), #header_lnkDepositStatement, a[href*='depositStatement']")
         if direct_link.count() > 0 and direct_link.first.is_visible():
             direct_link.first.click(force=True)
-            page.wait_for_load_state("networkidle", timeout=15000)
             time.sleep(1)
             dismiss_cookiebot(page)
             if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
@@ -256,7 +278,7 @@ def navigate_to_depot_holdings(page):
     except Exception:
         pass
 
-    # 3. Try clicking 'Konto & Depot' top menu item first to open submenu
+    # 3. Try top menu: Konto & Depot -> Depotbestand
     try:
         konto_depot = page.locator("a:has-text('Konto & Depot'), span:has-text('Konto & Depot')")
         if konto_depot.count() > 0 and konto_depot.first.is_visible():
@@ -265,7 +287,6 @@ def navigate_to_depot_holdings(page):
             depot_sub = page.locator("a:has-text('Depotbestand')")
             if depot_sub.count() > 0 and depot_sub.first.is_visible():
                 depot_sub.first.click(force=True)
-                page.wait_for_load_state("networkidle", timeout=15000)
                 time.sleep(1)
                 dismiss_cookiebot(page)
                 if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
@@ -273,22 +294,23 @@ def navigate_to_depot_holdings(page):
     except Exception:
         pass
 
-    # 4. Fallback to row dropdown arrow in the overview table
-    print("[*] Locating Depot row on overview table...", file=sys.stderr)
+    # 4. Fallback to Depot row in overview table
+    log("[*] Locating Depot row on overview table...")
     depot_row = page.locator("tr").filter(has_text="Depot").first
     if not depot_row or depot_row.count() == 0:
         depot_row = page.locator("div:has-text('Depot')").first
 
     if not depot_row or depot_row.count() == 0:
-        print("[!] Warning: Could not find Depot row on the overview screen.", file=sys.stderr)
+        log("[!] Warning: Could not find Depot row on overview screen.")
         return False
 
     depot_row.scroll_into_view_if_needed()
     time.sleep(0.3)
 
-    # Check if 'Bestand' menu is already visible
+    # Check if 'Bestand' popup is already visible
     bestand_button = page.get_by_text("Bestand", exact=True)
     if not (bestand_button.count() > 0 and bestand_button.first.is_visible()):
+        # Try clicking any trigger in the last column
         last_cell = depot_row.locator("td").last
         cell_triggers = last_cell.locator("button, a, span, div, svg").all()
         clicked = False
@@ -310,18 +332,23 @@ def navigate_to_depot_holdings(page):
     # Click 'Bestand' from popup
     bestand_item = page.get_by_text("Bestand", exact=True).first
     if bestand_item.count() > 0 and bestand_item.is_visible():
-        print("[*] Opening Depotbestand (stocks & ETFs)...", file=sys.stderr)
+        log("[*] Opening Depotbestand (stocks & ETFs)...")
         bestand_item.click(force=True)
-        try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
-        time.sleep(1)
+        time.sleep(1.5)
         dismiss_cookiebot(page)
         return True
-    else:
-        print("[!] Warning: 'Bestand' option not found in Depot action menu.", file=sys.stderr)
-        return False
+
+    # 5. User assistance if running headed
+    if not headless:
+        log("[!] Please click 'Bestand' next to your Depot in the browser window now...")
+        for _ in range(20):
+            time.sleep(1)
+            if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
+                log("[*] Detected navigation to Depotbestand!")
+                return True
+
+    log("[!] Warning: Could not navigate to Depotbestand.")
+    return False
 
 
 def navigate_to_overview(page, overview_url):
@@ -331,20 +358,22 @@ def navigate_to_overview(page, overview_url):
     if overview_link.count() > 0 and overview_link.first.is_visible():
         try:
             overview_link.first.click(force=True)
-            page.wait_for_load_state("networkidle", timeout=15000)
             time.sleep(1)
             dismiss_cookiebot(page)
             return
         except Exception:
             pass
-    page.goto(overview_url, wait_until="networkidle")
-    time.sleep(1)
-    dismiss_cookiebot(page)
+    try:
+        page.goto(overview_url, wait_until="domcontentloaded")
+        time.sleep(1)
+        dismiss_cookiebot(page)
+    except Exception:
+        pass
 
 
 def run_exporter(args, username, password):
     with sync_playwright() as p:
-        print("[*] Launching browser...", file=sys.stderr)
+        log("[*] Launching browser...")
         browser = p.chromium.launch(
             headless=args.headless,
             args=["--disable-blink-features=AutomationControlled"]
@@ -360,25 +389,25 @@ def run_exporter(args, username, password):
         )
         page = context.new_page()
 
-        print(f"[*] Navigating to {LOGIN_URL} ...", file=sys.stderr)
-        page.goto(LOGIN_URL, wait_until="networkidle")
+        log(f"[*] Navigating to {LOGIN_URL} ...")
+        page.goto(LOGIN_URL, wait_until="domcontentloaded")
 
         # Wait for dynamic login form rendering
         try:
             page.wait_for_selector(USER_SELECTOR, timeout=30000)
         except PlaywrightTimeoutError:
-            print("Error: Login form elements did not render within 30 seconds.", file=sys.stderr)
+            log("Error: Login form elements did not render within 30 seconds.")
             browser.close()
-            sys.exit(1)
+            pause_and_exit(1)
 
-        print("[*] Submitting login credentials...", file=sys.stderr)
+        log("[*] Submitting login credentials...")
         page.fill(USER_SELECTOR, username)
         page.fill(PASS_SELECTOR, password)
         page.click(SUBMIT_SELECTOR)
 
         # Handle 2FA / Session transition
-        print(f"[*] Waiting for 2FA approval / login completion (up to {args.timeout}s)...", file=sys.stderr)
-        print("[!] Please check and confirm the push notification in your flatex Secure App if prompted.", file=sys.stderr)
+        log(f"[*] Waiting for 2FA approval / login completion (up to {args.timeout}s)...")
+        log("[!] Please check and confirm the push notification in your flatex Secure App if prompted.")
 
         login_success = False
         start_time = time.time()
@@ -398,19 +427,19 @@ def run_exporter(args, username, password):
             if error_box.count() > 0 and error_box.first.is_visible():
                 err_text = error_box.first.inner_text().strip()
                 if err_text:
-                    print(f"Error from flatex portal: {err_text}", file=sys.stderr)
+                    log(f"Error from flatex portal: {err_text}")
                     browser.close()
-                    sys.exit(1)
+                    pause_and_exit(1)
 
             time.sleep(2)
 
         if not login_success:
-            print("Error: Login was not completed within the timeout period.", file=sys.stderr)
+            log("Error: Login was not completed within the timeout period.")
             browser.close()
-            sys.exit(1)
+            pause_and_exit(1)
 
-        print("[*] Login successful!", file=sys.stderr)
-        page.wait_for_load_state("networkidle", timeout=15000)
+        log("[*] Login successful!")
+        time.sleep(1)
         dismiss_cookiebot(page)
         overview_url = page.url
 
@@ -418,7 +447,7 @@ def run_exporter(args, username, password):
 
         # 1. Export Depot Holdings (Stocks, ETFs)
         if args.type in ("all", "holdings"):
-            if navigate_to_depot_holdings(page):
+            if navigate_to_depot_holdings(page, headless=args.headless):
                 holdings_csv = trigger_csv_export(page, headless=args.headless)
                 if holdings_csv:
                     exported_results["holdings"] = holdings_csv
@@ -426,7 +455,7 @@ def run_exporter(args, username, password):
         # 2. Export Accounts Summary (Cashkonto, CFD, Whitebox, Depot balances)
         if args.type in ("all", "summary"):
             navigate_to_overview(page, overview_url)
-            print("[*] Exporting accounts summary (Cash, CFD, Whitebox, Depot totals)...", file=sys.stderr)
+            log("[*] Exporting accounts summary (Cash, CFD, Whitebox, Depot totals)...")
             summary_csv = trigger_csv_export(page, headless=args.headless)
             if summary_csv:
                 exported_results["summary"] = summary_csv
@@ -434,8 +463,8 @@ def run_exporter(args, username, password):
         browser.close()
 
         if not exported_results:
-            print("Error: No data was exported.", file=sys.stderr)
-            sys.exit(1)
+            log("Error: No data was exported.")
+            pause_and_exit(1)
 
         # Output handling
         clean_base = args.output.replace(".csv", "").replace(".json", "")
@@ -452,7 +481,7 @@ def run_exporter(args, username, password):
                 out_file = Path(f"{clean_base}.json").resolve()
                 with open(out_file, "w", encoding="utf-8") as f:
                     f.write(json_output)
-                print(f"[*] Success! Saved structured JSON to: {out_file}", file=sys.stderr)
+                log(f"[*] Success! Saved structured JSON to: {out_file}")
         else:
             # CSV output
             if len(exported_results) == 1:
@@ -463,19 +492,30 @@ def run_exporter(args, username, password):
                 else:
                     with open(out_file, "w", encoding="utf-8") as f:
                         f.write(raw_csv)
-                    print(f"[*] Success! Saved {key} to: {out_file}", file=sys.stderr)
+                    log(f"[*] Success! Saved {key} to: {out_file}")
             else:
                 for key, raw_csv in exported_results.items():
                     out_file = Path(f"{clean_base}_{key}.csv").resolve()
                     with open(out_file, "w", encoding="utf-8") as f:
                         f.write(raw_csv)
-                    print(f"[*] Success! Saved {key} to: {out_file}", file=sys.stderr)
+                    log(f"[*] Success! Saved {key} to: {out_file}")
 
 
 def main():
     args = parse_args()
     username, password = get_credentials(args)
-    run_exporter(args, username, password)
+    try:
+        run_exporter(args, username, password)
+    except Exception as e:
+        log(f"\n[!] Unexpected error: {e}")
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"\n--- Crash trace at {time.ctime()} ---\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+        traceback.print_exc(file=sys.stderr)
+        pause_and_exit(1)
 
 
 if __name__ == "__main__":

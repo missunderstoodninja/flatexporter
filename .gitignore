@@ -4,6 +4,10 @@ venv/
 __pycache__/
 *.pyc
 
+# Logs
+*.log
+flatexporter.log
+
 # Security & Sensitive Files
 .env
 *.env
