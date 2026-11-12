@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Flatexporter (Playwright Edition)
-Automated depot (portfolio) statement exporter for flatex.de.
+Automated portfolio & account statement exporter for flatex.de.
 
-Supports modern flatex authentication with Two-Factor Authentication (2FA / SCA)
-and exports holdings (Bestand) for both the main Depot and Whitebox accounts.
+Exports:
+1. Depot Holdings (stocks, ETFs, individual positions)
+2. Accounts Summary (Cashkonto, CFD-Transferkonto, Whitebox totals)
 """
 
 import argparse
@@ -33,7 +34,7 @@ SUBMIT_SELECTOR = "#loginForm_btnLogin"
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Securely export your flatex depot and Whitebox holdings (Bestand) as CSV or JSON."
+        description="Securely export your flatex depot holdings (stocks & ETFs) and accounts summary (Cash, CFD, Whitebox)."
     )
     parser.add_argument(
         "-u", "--user",
@@ -44,15 +45,15 @@ def parse_args():
         help="Flatex Password (or set FLATEX_PASSWORD env var; omitted for hidden prompt)"
     )
     parser.add_argument(
-        "-a", "--account",
-        choices=["all", "depot", "whitebox"],
+        "-t", "--type",
+        choices=["all", "holdings", "summary"],
         default="all",
-        help="Account to export: 'depot', 'whitebox', or 'all' (default: all)"
+        help="Data to export: 'holdings' (Depot stocks/ETFs), 'summary' (Cash, CFD, Whitebox balances), or 'all' (default: all)"
     )
     parser.add_argument(
         "-o", "--output",
         default="portfolio",
-        help="Output base name or file path (default: 'portfolio' -> portfolio_depot.csv / portfolio.json)"
+        help="Output base name or file path (default: 'portfolio' -> portfolio_holdings.csv & portfolio_summary.csv / portfolio.json)"
     )
     parser.add_argument(
         "--format",
@@ -129,7 +130,7 @@ def trigger_csv_export(page, headless=False):
     """Triggers the CSV download from the current table page using the Aktionen dropdown."""
     download = None
     try:
-        with page.expect_download(timeout=60000) as download_info:
+        with page.expect_download(timeout=45000) as download_info:
             triggered = False
 
             # 1. Check for Flatex Classic 'Aktionen' dropdown combobox
@@ -197,55 +198,43 @@ def trigger_csv_export(page, headless=False):
         return f.read()
 
 
-def navigate_and_export_bestand(page, account_name, row_keywords, headless=False):
+def navigate_and_export_holdings(page, headless=False):
     """
-    On the overview landing page, finds the row matching keywords (e.g. ['Depot'] or ['Whitebox', 'Anlage']),
-    opens its row action menu, clicks 'Bestand', and exports the CSV.
+    On the overview landing page, finds the Depot row, opens its row action menu,
+    clicks 'Bestand' to navigate to the securities list, and exports the holdings CSV.
     """
-    print(f"[*] Locating holdings ('Bestand') for: {account_name}...", file=sys.stderr)
+    print("[*] Locating Depot row on overview table...", file=sys.stderr)
 
-    # Find the row containing any of the keywords
-    target_row = None
-    for kw in row_keywords:
-        matching_rows = page.locator("tr").filter(has_text=kw)
-        if matching_rows.count() > 0:
-            target_row = matching_rows.first
-            break
+    depot_row = page.locator("tr").filter(has_text="Depot").first
+    if not depot_row or depot_row.count() == 0:
+        depot_row = page.locator("div:has-text('Depot')").first
 
-    if not target_row or target_row.count() == 0:
-        # Fallback to div / text matches
-        for kw in row_keywords:
-            matching_divs = page.locator(f"div:has-text('{kw}'), table tr:has-text('{kw}')")
-            if matching_divs.count() > 0:
-                target_row = matching_divs.first
-                break
-
-    if not target_row or target_row.count() == 0:
-        print(f"[!] Warning: Could not find account row for '{account_name}'.", file=sys.stderr)
+    if not depot_row or depot_row.count() == 0:
+        print("[!] Warning: Could not find Depot row on the overview screen.", file=sys.stderr)
         return None
 
-    target_row.scroll_into_view_if_needed()
+    depot_row.scroll_into_view_if_needed()
     time.sleep(0.3)
 
     # Check if 'Bestand' is already visible; if not, click the row dropdown arrow
     bestand_button = page.get_by_text("Bestand", exact=True)
     if not (bestand_button.count() > 0 and bestand_button.first.is_visible()):
         # Find the dropdown trigger (arrow button on the right of the row)
-        arrow_trigger = target_row.locator(
+        arrow_trigger = depot_row.locator(
             "button, [class*='arrow'], [class*='Combobox'], [class*='combobox'], [class*='select'], [class*='action'], [class*='Toggle'], a"
         ).last
         if arrow_trigger.count() > 0:
-            print(f"[*] Opening action menu for {account_name}...", file=sys.stderr)
+            print("[*] Opening Depot action dropdown...", file=sys.stderr)
             arrow_trigger.click()
             time.sleep(0.6)
         else:
-            print(f"[!] Warning: Could not locate action arrow for '{account_name}'.", file=sys.stderr)
+            print("[!] Warning: Could not locate Depot dropdown arrow.", file=sys.stderr)
             return None
 
     # Click 'Bestand'
     bestand_item = page.get_by_text("Bestand", exact=True).first
     if bestand_item.count() > 0 and bestand_item.is_visible():
-        print(f"[*] Opening {account_name} Bestand...", file=sys.stderr)
+        print("[*] Opening Depotbestand (stocks & ETFs)...", file=sys.stderr)
         bestand_item.click()
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
@@ -253,29 +242,12 @@ def navigate_and_export_bestand(page, account_name, row_keywords, headless=False
             pass
         time.sleep(1)
     else:
-        print(f"[!] Warning: 'Bestand' option not found in menu for '{account_name}'.", file=sys.stderr)
+        print("[!] Warning: 'Bestand' option not found in Depot action menu.", file=sys.stderr)
         return None
 
     # Export CSV from the holdings page
-    print(f"[*] Exporting CSV for {account_name}...", file=sys.stderr)
-    csv_data = trigger_csv_export(page, headless=headless)
-    return csv_data
-
-
-def return_to_overview(page, overview_url):
-    """Returns to the main overview landing page."""
-    print("[*] Returning to account overview...", file=sys.stderr)
-    overview_link = page.locator("a:has-text('Übersicht'), a:has-text('Finanzübersicht'), #header_lnkOverview")
-    if overview_link.count() > 0 and overview_link.first.is_visible():
-        try:
-            overview_link.first.click()
-            page.wait_for_load_state("networkidle", timeout=15000)
-            time.sleep(1)
-            return
-        except Exception:
-            pass
-    page.goto(overview_url, wait_until="networkidle")
-    time.sleep(1)
+    print("[*] Exporting Depot holdings CSV...", file=sys.stderr)
+    return trigger_csv_export(page, headless=headless)
 
 
 def run_exporter(args, username, password):
@@ -347,33 +319,26 @@ def run_exporter(args, username, password):
 
         print("[*] Login successful!", file=sys.stderr)
         page.wait_for_load_state("networkidle", timeout=15000)
-        overview_url = page.url
 
         exported_results = {}
 
-        # 1. Export Depot Bestand
-        if args.account in ("all", "depot"):
-            depot_csv = navigate_and_export_bestand(
-                page, "Depot", ["Depot"], headless=args.headless
-            )
-            if depot_csv:
-                exported_results["depot"] = depot_csv
+        # 1. Export Accounts Summary (Cashkonto, CFD, Whitebox, Depot balances) from the landing page
+        if args.type in ("all", "summary"):
+            print("[*] Exporting accounts summary (Cash, CFD, Whitebox, Depot totals)...", file=sys.stderr)
+            summary_csv = trigger_csv_export(page, headless=args.headless)
+            if summary_csv:
+                exported_results["summary"] = summary_csv
 
-        # 2. Export Whitebox Bestand
-        if args.account in ("all", "whitebox"):
-            if args.account == "all":
-                return_to_overview(page, overview_url)
-
-            whitebox_csv = navigate_and_export_bestand(
-                page, "Whitebox", ["flatex wealth", "Whitebox", "Anlage 1", "Anlage"], headless=args.headless
-            )
-            if whitebox_csv:
-                exported_results["whitebox"] = whitebox_csv
+        # 2. Navigate to Depot Holdings (Stocks & ETFs) and export
+        if args.type in ("all", "holdings"):
+            holdings_csv = navigate_and_export_holdings(page, headless=args.headless)
+            if holdings_csv:
+                exported_results["holdings"] = holdings_csv
 
         browser.close()
 
         if not exported_results:
-            print("Error: No holdings data was exported.", file=sys.stderr)
+            print("Error: No data was exported.", file=sys.stderr)
             sys.exit(1)
 
         # Output handling
@@ -381,8 +346,8 @@ def run_exporter(args, username, password):
 
         if args.format == "json":
             json_data = {}
-            for acct_key, raw_csv in exported_results.items():
-                json_data[acct_key] = parse_german_csv(raw_csv)
+            for key, raw_csv in exported_results.items():
+                json_data[key] = parse_german_csv(raw_csv)
 
             json_output = json.dumps(json_data, indent=2, ensure_ascii=False)
             if args.output == "-":
@@ -395,20 +360,20 @@ def run_exporter(args, username, password):
         else:
             # CSV output
             if len(exported_results) == 1:
-                acct_name, raw_csv = next(iter(exported_results.items()))
-                out_file = Path(f"{clean_base}.csv" if args.output != "-" else f"{clean_base}_{acct_name}.csv").resolve()
+                key, raw_csv = next(iter(exported_results.items()))
+                out_file = Path(f"{clean_base}.csv" if args.output.endswith(".csv") else f"{clean_base}_{key}.csv").resolve()
                 if args.output == "-":
                     print(raw_csv)
                 else:
                     with open(out_file, "w", encoding="utf-8") as f:
                         f.write(raw_csv)
-                    print(f"[*] Success! Saved {acct_name} holdings to: {out_file}", file=sys.stderr)
+                    print(f"[*] Success! Saved {key} to: {out_file}", file=sys.stderr)
             else:
-                for acct_name, raw_csv in exported_results.items():
-                    out_file = Path(f"{clean_base}_{acct_name}.csv").resolve()
+                for key, raw_csv in exported_results.items():
+                    out_file = Path(f"{clean_base}_{key}.csv").resolve()
                     with open(out_file, "w", encoding="utf-8") as f:
                         f.write(raw_csv)
-                    print(f"[*] Success! Saved {acct_name} holdings to: {out_file}", file=sys.stderr)
+                    print(f"[*] Success! Saved {key} to: {out_file}", file=sys.stderr)
 
 
 def main():

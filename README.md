@@ -24,33 +24,51 @@ playwright install chromium
 
 ### Usage
 
-#### Export Both Depot & Whitebox Holdings (Default)
+#### Export Both Depot Holdings & Accounts Summary (Default)
 ```bash
-# Downloads both holdings: saves portfolio_depot.csv and portfolio_whitebox.csv
+# Downloads both: saves portfolio_holdings.csv and portfolio_summary.csv
 ./venv/bin/python3 flatexporter.py -o portfolio
 ```
 
-#### Export Only Main Depot or Only Whitebox
+#### Export Only Holdings (Stocks & ETFs) or Only Accounts Summary
 ```bash
-# Export only the main Depot holdings
-./venv/bin/python3 flatexporter.py -a depot -o portfolio_depot.csv
+# Export only the Depot securities holdings (stocks, ETFs, individual positions)
+./venv/bin/python3 flatexporter.py -t holdings -o portfolio_holdings.csv
 
-# Export only the Whitebox holdings
-./venv/bin/python3 flatexporter.py -a whitebox -o portfolio_whitebox.csv
+# Export only the Accounts Summary (Cashkonto, CFD, Whitebox, Depot balances)
+./venv/bin/python3 flatexporter.py -t summary -o portfolio_summary.csv
 ```
 
-#### Export as Structured JSON (Combined)
+#### Export as Unified Structured JSON
 ```bash
 ./venv/bin/python3 flatexporter.py --format json -o portfolio.json
 ```
 Creates `portfolio.json` containing:
 ```json
 {
-  "depot": [ ... ],
-  "whitebox": [ ... ]
+  "summary": [
+    {
+      "Konto": "***377 Cashkonto - ...",
+      "Saldo/Wert*": 1250.50,
+      "Verfügbar": 1250.50
+    },
+    {
+      "Konto": "flatex wealth - powered by Whitebox (Anlage 1)",
+      "Saldo/Wert*": 5000.00
+    }
+  ],
+  "holdings": [
+    {
+      "Bezeichnung": "Vanguard FTSE All-World UCITS ETF",
+      "ISIN": "IE00BK5BQT80",
+      "Stück": 100,
+      "Kurswert": 11500.00,
+      "Gewinn/Verlust": 1200.50
+    }
+  ]
 }
 ```
-Automatically converts German localized numbers (e.g., `1.234,56 €`) into standardized JSON numbers (`1234.56`).
+Automatically normalizes European numbers (e.g. `1.234,56 €` -> `1234.56`).
 
 #### Pipe directly to downstream tools / APIs
 ```bash
@@ -70,8 +88,11 @@ FLATEX_USER="your_user" FLATEX_PASSWORD="your_password" ./venv/bin/python3 flate
 | :--- | :--- | :--- |
 | `-u`, `--user` | Flatex Username / Account Number (or set `FLATEX_USER`) | Prompted |
 | `-p`, `--password` | Flatex Password (or set `FLATEX_PASSWORD`) | Prompted |
-| `-a`, `--account` | Account to export: `all`, `depot`, or `whitebox` | `all` |
+| `-t`, `--type` | Data to export: `all`, `holdings`, or `summary` | `all` |
 | `-o`, `--output` | Destination base name or path (use `-` for `stdout`) | `portfolio` |
+| `--format` | Output format: `csv` or `json` | `csv` |
+| `--headless` | Run in headless mode (omitted = opens visible browser) | `False` |
+| `--timeout` | Timeout in seconds to wait for 2FA approval | `180` |
 | `--format` | Output format: `csv` or `json` | `csv` |
 | `--headless` | Run in headless mode (omitted = opens visible browser) | `False` |
 | `--timeout` | Timeout in seconds to wait for 2FA approval | `180` |
