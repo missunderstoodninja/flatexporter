@@ -204,46 +204,48 @@ def run_exporter(args, username, password):
 
         # Trigger download: Look for standard flatex export buttons, comboboxes, or links
         download = None
-        export_selectors = [
-            # Combobox option for CSV in flatex classic
-            "select[name*='tableAction']",
-            "#depositStatementForm_tableActionCombobox",
-            "button:has-text('CSV')",
-            "a:has-text('CSV')",
-            "button:has-text('Export')",
-            "a:has-text('Exportieren')",
-            "[title*='CSV']",
-            "[title*='Export']"
-        ]
-
         try:
-            with page.expect_download(timeout=30000) as download_info:
+            with page.expect_download(timeout=60000) as download_info:
                 triggered = False
-                for sel in export_selectors:
-                    elem = page.locator(sel)
-                    if elem.count() > 0 and elem.first.is_visible():
-                        if elem.first.evaluate("el => el.tagName.toLowerCase()") == "select":
-                            # Try selecting CSV option
-                            try:
-                                elem.first.select_option(label="CSV")
-                                triggered = True
-                                break
-                            except Exception:
-                                pass
-                        else:
+
+                # 1. Check for Flatex Classic 'Aktionen' dropdown combobox
+                combobox = page.locator("[id*='tableActionCombobox'], text='Aktionen'")
+                if combobox.count() > 0 and combobox.first.is_visible():
+                    try:
+                        print("[*] Found 'Aktionen' dropdown, opening menu...", file=sys.stderr)
+                        combobox.first.click()
+                        time.sleep(0.5)
+
+                        # Look for the CSV option in the expanded dropdown
+                        csv_entry = page.locator("[id*='entriesI1I'], [id*='entries'][id*='1'], text='CSV-Export', text='CSV Export', text='CSV'")
+                        if csv_entry.count() > 0 and csv_entry.first.is_visible():
+                            print("[*] Clicking 'CSV-Export' entry...", file=sys.stderr)
+                            csv_entry.first.click()
+                            triggered = True
+                    except Exception as e:
+                        print(f"[*] Note: Combobox click attempted ({e})", file=sys.stderr)
+
+                # 2. If not triggered via dropdown, look for direct buttons/links
+                if not triggered:
+                    export_selectors = [
+                        "button:has-text('CSV')",
+                        "a:has-text('CSV')",
+                        "button:has-text('Export')",
+                        "a:has-text('Exportieren')",
+                        "[title*='CSV']",
+                        "[title*='Export']"
+                    ]
+                    for sel in export_selectors:
+                        elem = page.locator(sel)
+                        if elem.count() > 0 and elem.first.is_visible():
+                            print(f"[*] Clicking export element '{sel}'...", file=sys.stderr)
                             elem.first.click()
                             triggered = True
                             break
 
-                if not triggered:
-                    # If in headed mode, let user click the export button manually
-                    if not args.headless:
-                        print("[!] Automatic export button click could not locate button.", file=sys.stderr)
-                        print("[!] Please click 'CSV Export' in the open browser window now...", file=sys.stderr)
-                    else:
-                        print("Error: Could not locate export button in headless mode.", file=sys.stderr)
-                        browser.close()
-                        sys.exit(1)
+                # 3. If in headed mode, let user click the export button manually if needed
+                if not triggered and not args.headless:
+                    print("[!] Please click 'Aktionen' -> 'CSV-Export' in the browser window now...", file=sys.stderr)
 
                 download = download_info.value
         except PlaywrightTimeoutError:
