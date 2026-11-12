@@ -24,20 +24,33 @@ playwright install chromium
 
 ### Usage
 
-#### Interactive Mode (Default: Opens browser window so you can approve 2FA)
+#### Export Both Depot & Whitebox Holdings (Default)
 ```bash
-./venv/bin/python3 flatexporter.py -o portfolio.csv
+# Downloads both holdings: saves portfolio_depot.csv and portfolio_whitebox.csv
+./venv/bin/python3 flatexporter.py -o portfolio
 ```
-1. You will be prompted for your username and password (password input is masked).
-2. Chromium will launch and navigate to `https://konto.flatex.de/`.
-3. It fills the credentials and waits for your confirmation in the **Flatex Secure App** on your phone.
-4. Once authenticated, it triggers the depot statement export and saves it to `portfolio.csv`.
 
-#### Export as Structured JSON
+#### Export Only Main Depot or Only Whitebox
+```bash
+# Export only the main Depot holdings
+./venv/bin/python3 flatexporter.py -a depot -o portfolio_depot.csv
+
+# Export only the Whitebox holdings
+./venv/bin/python3 flatexporter.py -a whitebox -o portfolio_whitebox.csv
+```
+
+#### Export as Structured JSON (Combined)
 ```bash
 ./venv/bin/python3 flatexporter.py --format json -o portfolio.json
 ```
-Automatically converts German localized CSV numbers (e.g., `1.234,56 €`) into standardized JSON numbers (`1234.56`).
+Creates `portfolio.json` containing:
+```json
+{
+  "depot": [ ... ],
+  "whitebox": [ ... ]
+}
+```
+Automatically converts German localized numbers (e.g., `1.234,56 €`) into standardized JSON numbers (`1234.56`).
 
 #### Pipe directly to downstream tools / APIs
 ```bash
@@ -46,7 +59,7 @@ Automatically converts German localized CSV numbers (e.g., `1.234,56 €`) into 
 
 #### Headless Mode (For CI/CD or Background Daemons)
 ```bash
-FLATEX_USER="your_user" FLATEX_PASSWORD="your_password" ./venv/bin/python3 flatexporter.py --headless -o portfolio.csv
+FLATEX_USER="your_user" FLATEX_PASSWORD="your_password" ./venv/bin/python3 flatexporter.py --headless -o portfolio
 ```
 
 ---
@@ -57,7 +70,11 @@ FLATEX_USER="your_user" FLATEX_PASSWORD="your_password" ./venv/bin/python3 flate
 | :--- | :--- | :--- |
 | `-u`, `--user` | Flatex Username / Account Number (or set `FLATEX_USER`) | Prompted |
 | `-p`, `--password` | Flatex Password (or set `FLATEX_PASSWORD`) | Prompted |
-| `-o`, `--output` | Destination file path (use `-` for `stdout`) | `portfolio.csv` |
+| `-a`, `--account` | Account to export: `all`, `depot`, or `whitebox` | `all` |
+| `-o`, `--output` | Destination base name or path (use `-` for `stdout`) | `portfolio` |
+| `--format` | Output format: `csv` or `json` | `csv` |
+| `--headless` | Run in headless mode (omitted = opens visible browser) | `False` |
+| `--timeout` | Timeout in seconds to wait for 2FA approval | `180` |
 | `--format` | Output format: `csv` or `json` | `csv` |
 | `--headless` | Run in headless mode (omitted = opens visible browser) | `False` |
 | `--timeout` | Timeout in seconds to wait for 2FA approval | `180` |
