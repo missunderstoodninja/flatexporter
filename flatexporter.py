@@ -238,10 +238,42 @@ def navigate_to_depot_holdings(page):
     """
     dismiss_cookiebot(page)
 
-    # Check if already on the Depotbestand page
+    # 1. Check if already on the Depotbestand page
     if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
         return True
 
+    # 2. Try direct menu links: Konto & Depot -> Depotbestand
+    print("[*] Navigating to Depotbestand...", file=sys.stderr)
+    try:
+        direct_link = page.locator("a:has-text('Depotbestand'), #header_lnkDepositStatement, a[href*='depositStatement']")
+        if direct_link.count() > 0 and direct_link.first.is_visible():
+            direct_link.first.click(force=True)
+            page.wait_for_load_state("networkidle", timeout=15000)
+            time.sleep(1)
+            dismiss_cookiebot(page)
+            if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
+                return True
+    except Exception:
+        pass
+
+    # 3. Try clicking 'Konto & Depot' top menu item first to open submenu
+    try:
+        konto_depot = page.locator("a:has-text('Konto & Depot'), span:has-text('Konto & Depot')")
+        if konto_depot.count() > 0 and konto_depot.first.is_visible():
+            konto_depot.first.click(force=True)
+            time.sleep(0.5)
+            depot_sub = page.locator("a:has-text('Depotbestand')")
+            if depot_sub.count() > 0 and depot_sub.first.is_visible():
+                depot_sub.first.click(force=True)
+                page.wait_for_load_state("networkidle", timeout=15000)
+                time.sleep(1)
+                dismiss_cookiebot(page)
+                if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
+                    return True
+    except Exception:
+        pass
+
+    # 4. Fallback to row dropdown arrow in the overview table
     print("[*] Locating Depot row on overview table...", file=sys.stderr)
     depot_row = page.locator("tr").filter(has_text="Depot").first
     if not depot_row or depot_row.count() == 0:
@@ -254,22 +286,28 @@ def navigate_to_depot_holdings(page):
     depot_row.scroll_into_view_if_needed()
     time.sleep(0.3)
 
-    # Check if 'Bestand' is already visible; if not, click the row dropdown arrow
+    # Check if 'Bestand' menu is already visible
     bestand_button = page.get_by_text("Bestand", exact=True)
     if not (bestand_button.count() > 0 and bestand_button.first.is_visible()):
-        arrow_trigger = depot_row.locator(
-            "button, [class*='arrow'], [class*='Combobox'], [class*='combobox'], [class*='select'], [class*='action'], [class*='Toggle'], a"
-        ).last
-        if arrow_trigger.count() > 0:
-            print("[*] Opening Depot action dropdown...", file=sys.stderr)
-            arrow_trigger.click(force=True)
-            time.sleep(0.6)
-            dismiss_cookiebot(page)
-        else:
-            print("[!] Warning: Could not locate Depot dropdown arrow.", file=sys.stderr)
-            return False
+        last_cell = depot_row.locator("td").last
+        cell_triggers = last_cell.locator("button, a, span, div, svg").all()
+        clicked = False
+        if cell_triggers:
+            for trg in reversed(cell_triggers):
+                try:
+                    if trg.is_visible():
+                        trg.click(force=True)
+                        clicked = True
+                        break
+                except Exception:
+                    pass
+        if not clicked:
+            last_cell.click(force=True)
 
-    # Click 'Bestand'
+        time.sleep(0.6)
+        dismiss_cookiebot(page)
+
+    # Click 'Bestand' from popup
     bestand_item = page.get_by_text("Bestand", exact=True).first
     if bestand_item.count() > 0 and bestand_item.is_visible():
         print("[*] Opening Depotbestand (stocks & ETFs)...", file=sys.stderr)
