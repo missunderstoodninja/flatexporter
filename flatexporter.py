@@ -209,36 +209,51 @@ def run_exporter(args, username, password):
                 triggered = False
 
                 # 1. Check for Flatex Classic 'Aktionen' dropdown combobox
-                combobox = page.locator("[id*='tableActionCombobox'], text='Aktionen'")
-                if combobox.count() > 0 and combobox.first.is_visible():
-                    try:
-                        print("[*] Found 'Aktionen' dropdown, opening menu...", file=sys.stderr)
-                        combobox.first.click()
-                        time.sleep(0.5)
+                combobox_candidates = [
+                    page.locator("[id*='tableActionCombobox']"),
+                    page.locator("button:has-text('Aktionen')"),
+                    page.get_by_text("Aktionen", exact=True),
+                    page.locator("select[name*='tableAction']")
+                ]
+                for cb in combobox_candidates:
+                    if cb.count() > 0 and cb.first.is_visible():
+                        try:
+                            print("[*] Found 'Aktionen' dropdown, opening menu...", file=sys.stderr)
+                            cb.first.click()
+                            time.sleep(0.8)
 
-                        # Look for the CSV option in the expanded dropdown
-                        csv_entry = page.locator("[id*='entriesI1I'], [id*='entries'][id*='1'], text='CSV-Export', text='CSV Export', text='CSV'")
-                        if csv_entry.count() > 0 and csv_entry.first.is_visible():
-                            print("[*] Clicking 'CSV-Export' entry...", file=sys.stderr)
-                            csv_entry.first.click()
-                            triggered = True
-                    except Exception as e:
-                        print(f"[*] Note: Combobox click attempted ({e})", file=sys.stderr)
+                            # Look for the CSV option in the expanded dropdown
+                            csv_candidates = [
+                                page.locator("[id*='entriesI1I']"),
+                                page.locator("[id*='entries'][id*='1']"),
+                                page.get_by_text("CSV-Export"),
+                                page.get_by_text("CSV Export"),
+                                page.get_by_text("CSV", exact=True)
+                            ]
+                            for entry in csv_candidates:
+                                if entry.count() > 0 and entry.first.is_visible():
+                                    print("[*] Clicking 'CSV-Export' entry...", file=sys.stderr)
+                                    entry.first.click()
+                                    triggered = True
+                                    break
+                            if triggered:
+                                break
+                        except Exception as e:
+                            print(f"[*] Note: Combobox click attempted ({e})", file=sys.stderr)
 
                 # 2. If not triggered via dropdown, look for direct buttons/links
                 if not triggered:
                     export_selectors = [
-                        "button:has-text('CSV')",
-                        "a:has-text('CSV')",
-                        "button:has-text('Export')",
-                        "a:has-text('Exportieren')",
-                        "[title*='CSV']",
-                        "[title*='Export']"
+                        page.locator("button:has-text('CSV')"),
+                        page.locator("a:has-text('CSV')"),
+                        page.locator("button:has-text('Export')"),
+                        page.locator("a:has-text('Exportieren')"),
+                        page.locator("[title*='CSV']"),
+                        page.locator("[title*='Export']")
                     ]
-                    for sel in export_selectors:
-                        elem = page.locator(sel)
+                    for elem in export_selectors:
                         if elem.count() > 0 and elem.first.is_visible():
-                            print(f"[*] Clicking export element '{sel}'...", file=sys.stderr)
+                            print("[*] Clicking direct export element...", file=sys.stderr)
                             elem.first.click()
                             triggered = True
                             break
