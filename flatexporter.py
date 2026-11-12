@@ -126,9 +126,39 @@ def parse_german_csv(csv_text):
     return records
 
 
+def dismiss_cookiebot(page):
+    """Dismisses and removes Cookiebot banners/underlays to prevent pointer interception."""
+    try:
+        accept_btn = page.locator(
+            "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, "
+            "#CybotCookiebotDialogBodyButtonAccept, "
+            "button:has-text('Alle zulassen'), "
+            "button:has-text('Alle akzeptieren')"
+        )
+        if accept_btn.count() > 0 and accept_btn.first.is_visible():
+            accept_btn.first.click(force=True)
+            time.sleep(0.3)
+    except Exception:
+        pass
+
+    # Ensure any invisible or lingering overlay element is removed from DOM
+    try:
+        page.evaluate("""() => {
+            const ids = ['CybotCookiebotDialog', 'CybotCookiebotDialogBodyUnderlay', 'cookie-banner'];
+            for (const id of ids) {
+                const el = document.getElementById(id);
+                if (el) el.remove();
+            }
+        }""")
+    except Exception:
+        pass
+
+
 def trigger_csv_export(page, headless=False):
     """Triggers the CSV download from the current table page using the Aktionen dropdown."""
+    dismiss_cookiebot(page)
     download = None
+
     try:
         with page.expect_download(timeout=45000) as download_info:
             triggered = False
@@ -144,21 +174,23 @@ def trigger_csv_export(page, headless=False):
                 if cb.count() > 0 and cb.first.is_visible():
                     try:
                         print("[*] Found 'Aktionen' dropdown, opening menu...", file=sys.stderr)
-                        cb.first.click()
+                        cb.first.click(force=True)
                         time.sleep(0.8)
+                        dismiss_cookiebot(page)
 
                         # Look for the CSV option in the expanded dropdown
                         csv_candidates = [
                             page.locator("[id*='entriesI1I']"),
-                            page.locator("[id*='entries'][id*='1']"),
+                            page.locator("[id*='tableActionCombobox_entriesI1I']"),
+                            page.get_by_text("Export CSV"),
                             page.get_by_text("CSV-Export"),
                             page.get_by_text("CSV Export"),
                             page.get_by_text("CSV", exact=True)
                         ]
                         for entry in csv_candidates:
                             if entry.count() > 0 and entry.first.is_visible():
-                                print("[*] Clicking 'CSV-Export' entry...", file=sys.stderr)
-                                entry.first.click()
+                                print("[*] Clicking 'Export CSV' entry...", file=sys.stderr)
+                                entry.first.click(force=True)
                                 triggered = True
                                 break
                         if triggered:
@@ -169,6 +201,8 @@ def trigger_csv_export(page, headless=False):
             # 2. If not triggered via dropdown, look for direct buttons/links
             if not triggered:
                 export_selectors = [
+                    page.locator("button:has-text('Export CSV')"),
+                    page.locator("a:has-text('Export CSV')"),
                     page.locator("button:has-text('CSV')"),
                     page.locator("a:has-text('CSV')"),
                     page.locator("button:has-text('Export')"),
@@ -179,13 +213,13 @@ def trigger_csv_export(page, headless=False):
                 for elem in export_selectors:
                     if elem.count() > 0 and elem.first.is_visible():
                         print("[*] Clicking direct export element...", file=sys.stderr)
-                        elem.first.click()
+                        elem.first.click(force=True)
                         triggered = True
                         break
 
             # 3. If in headed mode, let user click the export button manually if needed
             if not triggered and not headless:
-                print("[!] Please click 'Aktionen' -> 'CSV-Export' in the browser window now...", file=sys.stderr)
+                print("[!] Please click 'Aktionen' -> 'Export CSV' in the browser window now...", file=sys.stderr)
 
             download = download_info.value
     except PlaywrightTimeoutError:
@@ -198,20 +232,24 @@ def trigger_csv_export(page, headless=False):
         return f.read()
 
 
-def navigate_and_export_holdings(page, headless=False):
+def navigate_to_depot_holdings(page):
     """
-    On the overview landing page, finds the Depot row, opens its row action menu,
-    clicks 'Bestand' to navigate to the securities list, and exports the holdings CSV.
+    Ensures the browser navigates from the overview page to the Depotbestand page.
     """
-    print("[*] Locating Depot row on overview table...", file=sys.stderr)
+    dismiss_cookiebot(page)
 
+    # Check if already on the Depotbestand page
+    if page.locator("#depositStatementForm, [id*='depositStatement']").count() > 0:
+        return True
+
+    print("[*] Locating Depot row on overview table...", file=sys.stderr)
     depot_row = page.locator("tr").filter(has_text="Depot").first
     if not depot_row or depot_row.count() == 0:
         depot_row = page.locator("div:has-text('Depot')").first
 
     if not depot_row or depot_row.count() == 0:
         print("[!] Warning: Could not find Depot row on the overview screen.", file=sys.stderr)
-        return None
+        return False
 
     depot_row.scroll_into_view_if_needed()
     time.sleep(0.3)
@@ -219,35 +257,51 @@ def navigate_and_export_holdings(page, headless=False):
     # Check if 'Bestand' is already visible; if not, click the row dropdown arrow
     bestand_button = page.get_by_text("Bestand", exact=True)
     if not (bestand_button.count() > 0 and bestand_button.first.is_visible()):
-        # Find the dropdown trigger (arrow button on the right of the row)
         arrow_trigger = depot_row.locator(
             "button, [class*='arrow'], [class*='Combobox'], [class*='combobox'], [class*='select'], [class*='action'], [class*='Toggle'], a"
         ).last
         if arrow_trigger.count() > 0:
             print("[*] Opening Depot action dropdown...", file=sys.stderr)
-            arrow_trigger.click()
+            arrow_trigger.click(force=True)
             time.sleep(0.6)
+            dismiss_cookiebot(page)
         else:
             print("[!] Warning: Could not locate Depot dropdown arrow.", file=sys.stderr)
-            return None
+            return False
 
     # Click 'Bestand'
     bestand_item = page.get_by_text("Bestand", exact=True).first
     if bestand_item.count() > 0 and bestand_item.is_visible():
         print("[*] Opening Depotbestand (stocks & ETFs)...", file=sys.stderr)
-        bestand_item.click()
+        bestand_item.click(force=True)
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
             pass
         time.sleep(1)
+        dismiss_cookiebot(page)
+        return True
     else:
         print("[!] Warning: 'Bestand' option not found in Depot action menu.", file=sys.stderr)
-        return None
+        return False
 
-    # Export CSV from the holdings page
-    print("[*] Exporting Depot holdings CSV...", file=sys.stderr)
-    return trigger_csv_export(page, headless=headless)
+
+def navigate_to_overview(page, overview_url):
+    """Returns to the main overview landing page."""
+    dismiss_cookiebot(page)
+    overview_link = page.locator("a:has-text('Übersicht'), a:has-text('Finanzübersicht'), #header_lnkOverview")
+    if overview_link.count() > 0 and overview_link.first.is_visible():
+        try:
+            overview_link.first.click(force=True)
+            page.wait_for_load_state("networkidle", timeout=15000)
+            time.sleep(1)
+            dismiss_cookiebot(page)
+            return
+        except Exception:
+            pass
+    page.goto(overview_url, wait_until="networkidle")
+    time.sleep(1)
+    dismiss_cookiebot(page)
 
 
 def run_exporter(args, username, password):
@@ -319,21 +373,25 @@ def run_exporter(args, username, password):
 
         print("[*] Login successful!", file=sys.stderr)
         page.wait_for_load_state("networkidle", timeout=15000)
+        dismiss_cookiebot(page)
+        overview_url = page.url
 
         exported_results = {}
 
-        # 1. Export Accounts Summary (Cashkonto, CFD, Whitebox, Depot balances) from the landing page
+        # 1. Export Depot Holdings (Stocks, ETFs)
+        if args.type in ("all", "holdings"):
+            if navigate_to_depot_holdings(page):
+                holdings_csv = trigger_csv_export(page, headless=args.headless)
+                if holdings_csv:
+                    exported_results["holdings"] = holdings_csv
+
+        # 2. Export Accounts Summary (Cashkonto, CFD, Whitebox, Depot balances)
         if args.type in ("all", "summary"):
+            navigate_to_overview(page, overview_url)
             print("[*] Exporting accounts summary (Cash, CFD, Whitebox, Depot totals)...", file=sys.stderr)
             summary_csv = trigger_csv_export(page, headless=args.headless)
             if summary_csv:
                 exported_results["summary"] = summary_csv
-
-        # 2. Navigate to Depot Holdings (Stocks & ETFs) and export
-        if args.type in ("all", "holdings"):
-            holdings_csv = navigate_and_export_holdings(page, headless=args.headless)
-            if holdings_csv:
-                exported_results["holdings"] = holdings_csv
 
         browser.close()
 
